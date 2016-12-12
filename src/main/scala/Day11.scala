@@ -23,11 +23,11 @@ object Day11 extends App {
       def elem: Element
     }
 
-    case class Generator(val elem: Element) extends Item {
+    case class Generator(elem: Element) extends Item {
       override def toString: String = s"${elem}G"
     }
 
-    case class Microchip(val elem: Element) extends Item {
+    case class Microchip(elem: Element) extends Item {
       override def toString: String = s"${elem}M"
     }
 
@@ -80,7 +80,7 @@ object Day11 extends App {
           .map { case (_, s) => s.head }
           .toSet
           .union(items.filter {
-            case g: Generator => true
+            case _: Generator => true
             case _ => false
           })
 
@@ -107,7 +107,7 @@ object Day11 extends App {
       val nextFloors = (state.elevatorState.currentFloor, state.elevatorState.nextFloor) match {
         case (Floor(3), Floor(4)) => Set(Floor(3))
         case (Floor(2), Floor(1)) => Set(Floor(2))
-        case (Floor(a), Floor(b)) => Set(Floor(b - 1), Floor(b + 1))
+        case (Floor(_), Floor(b)) => Set(Floor(b - 1), Floor(b + 1))
       }
 
       val possibilities = for {
@@ -119,7 +119,7 @@ object Day11 extends App {
         if allCompatible(state.floors(state.elevatorState.currentFloor).diff(Set(first, second)))
       } yield ElevatorState(state.elevatorState.nextFloor, nextFloor, Set(first, second))
 
-      possibilities.toSet
+      possibilities
     }
 
     def loadItems(state: State, elevatorState: ElevatorState): State = {
@@ -140,31 +140,61 @@ object Day11 extends App {
       loadItems(unloadItems(state, state.elevatorState), move).copy(elevatorState = move)
     }
 
+    def estimatedCost(state: State): Int = {
+      state.floors(Floor(3)).size * 2 +
+      state.floors(Floor(2)).size * 4 +
+      state.floors(Floor(1)).size * 6 +
+      Math.abs(state.elevatorState.nextFloor.number - 4)
+    }
+
+    case class Step(state: State, history: List[State], cost: Int) {
+      def fullPath: List[State] = (state :: history).reverse
+      def stepCount: Int = history.size
+
+      def next(move: ElevatorState): Step = {
+        val nextState = applyMove(state, move)
+        val estimation = stepCount + estimatedCost(nextState)
+        Step(nextState, state :: history, estimation)
+      }
+    }
+
+    implicit val stepOrdering = new Ordering[Step] {
+      override def compare(x: Step, y: Step): Int =
+        -x.cost.compareTo(y.cost)
+    }
+
     def findSolution(initialState: State): Option[Int] = {
-      val steps: mutable.Queue[(State, List[State])] = mutable.Queue(initialState -> List.empty)
+      val steps: mutable.PriorityQueue[Step] = mutable.PriorityQueue(Step(initialState, List.empty, 0))
       val visited: mutable.Set[State] = mutable.Set.empty
       var result: Option[Int] = None
+      var reportTick: Long = System.currentTimeMillis()
 
       while (steps.nonEmpty && result.isEmpty) {
-        val (step, history) = steps.dequeue
+        val step = steps.dequeue
 
-        if (isSolution(step)) {
+        val tick = System.currentTimeMillis()
+        if ((tick - reportTick) > 2000) {
+          println(s"Current step count: ${step.stepCount}; estimation: ${step.cost}; queue length: ${steps.length}; visited states: ${visited.size}")
+          reportTick = tick
+        }
+
+        if (isSolution(step.state)) {
           println("Found result with steps:")
-          (step :: history).reverse.foreach { s =>
+          step.fullPath.foreach { s =>
             dumpState(s)
             println("---")
           }
 
-          result = Some(history.size)
+          result = Some(step.stepCount)
         } else {
-          if (!visited.contains(step)) {
-            val validMoves = validElevatorMoves(step)
+          if (!visited.contains(step.state)) {
+            val validMoves = validElevatorMoves(step.state)
             for (move <- validMoves) {
-              steps.enqueue(applyMove(step, move) -> (step :: history))
+              steps.enqueue(step.next(move))
             }
           }
         }
-        visited += step
+        visited += step.state
       }
 
       result
