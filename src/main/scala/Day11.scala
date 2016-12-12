@@ -144,7 +144,7 @@ object Day11 extends App {
       state.floors(Floor(3)).size * 2 +
       state.floors(Floor(2)).size * 4 +
       state.floors(Floor(1)).size * 6 +
-      Math.abs(state.elevatorState.nextFloor.number - 4)
+      state.elevatorState.items.size * (2 * (4 - state.elevatorState.nextFloor.number))
     }
 
     case class Step(state: State, history: List[State], cost: Int) {
@@ -153,7 +153,7 @@ object Day11 extends App {
 
       def next(move: ElevatorState): Step = {
         val nextState = applyMove(state, move)
-        val estimation = stepCount + estimatedCost(nextState)
+        val estimation = stepCount + 1 + estimatedCost(nextState)
         Step(nextState, state :: history, estimation)
       }
     }
@@ -187,10 +187,11 @@ object Day11 extends App {
 
           result = Some(step.stepCount)
         } else {
-          if (!visited.contains(step.state)) {
-            val validMoves = validElevatorMoves(step.state)
-            for (move <- validMoves) {
-              steps.enqueue(step.next(move))
+          val validMoves = validElevatorMoves(step.state)
+          for (move <- validMoves) {
+            val nextStep = step.next(move)
+            if (!visited.contains(nextStep.state)) {
+              steps.enqueue(nextStep)
             }
           }
         }
