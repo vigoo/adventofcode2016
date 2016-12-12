@@ -33,19 +33,19 @@ object Day11 extends App {
 
     type FloorState = Set[Item]
 
-    case class ElevatorState(currentFloor: Floor, nextFloor: Floor, items: Set[Item])
+    case class ElevatorState(currentFloor: Floor)
+
+    case class ElevatorStep(nextFloor: Floor, items: Set[Item])
 
     case class State(elevatorState: ElevatorState, floors: Map[Floor, FloorState])
 
     def dumpState(state: State): Unit = {
       for (floor <- (4 to(1, -1)).map(Floor)) {
         print(s"F${floor.number} ")
-        if (state.elevatorState.nextFloor == floor) {
-          print("E(")
-          print(state.elevatorState.items.mkString(" "))
-          print(") ")
+        if (state.elevatorState.currentFloor == floor) {
+          print("E ")
         } else {
-          print(".           ")
+          print(". ")
         }
 
         state.floors(floor).foreach { item =>
@@ -94,20 +94,20 @@ object Day11 extends App {
     }
 
     def itemsOnCurrentFloor(state: State): Set[Item] =
-      state.floors(state.elevatorState.nextFloor).union(state.elevatorState.items)
+      state.floors(state.elevatorState.currentFloor)
 
     def isSolution(state: State): Boolean = {
-      val floor = state.elevatorState.nextFloor
+      val floor = state.elevatorState.currentFloor
       val items = itemsOnCurrentFloor(state).size
       floor == Floor(4) && items == elementCount * 2
     }
 
-    def validElevatorMoves(state: State): Set[ElevatorState] = {
+    def validElevatorMoves(state: State): Set[ElevatorStep] = {
       val items = itemsOnCurrentFloor(state)
-      val nextFloors = (state.elevatorState.currentFloor, state.elevatorState.nextFloor) match {
-        case (Floor(3), Floor(4)) => Set(Floor(3))
-        case (Floor(2), Floor(1)) => Set(Floor(2))
-        case (Floor(_), Floor(b)) => Set(Floor(b - 1), Floor(b + 1))
+      val nextFloors = state.elevatorState.currentFloor match {
+        case Floor(4) => Set(Floor(3))
+        case Floor(1) => Set(Floor(2))
+        case Floor(b) => Set(Floor(b - 1), Floor(b + 1))
       }
 
       val possibilities = for {
@@ -117,41 +117,46 @@ object Day11 extends App {
         if compatible(first, second)
         if allCompatible(state.floors(nextFloor).union(Set(first, second)))
         if allCompatible(state.floors(state.elevatorState.currentFloor).diff(Set(first, second)))
-      } yield ElevatorState(state.elevatorState.nextFloor, nextFloor, Set(first, second))
+      } yield ElevatorStep(nextFloor, Set(first, second))
 
       possibilities
     }
 
-    def loadItems(state: State, elevatorState: ElevatorState): State = {
-      state.copy(
-        floors = state.floors.updated(
-          elevatorState.currentFloor,
-          state.floors(elevatorState.currentFloor).diff(elevatorState.items)))
+    def loadItems(floors: Map[Floor, FloorState], items: Set[Item], from: Floor): Map[Floor, FloorState] = {
+      floors.updated(
+        from,
+        floors(from).diff(items))
     }
 
-    def unloadItems(state: State, elevatorState: ElevatorState): State = {
-      state.copy(
-        floors = state.floors.updated(
-          elevatorState.nextFloor,
-          state.floors(elevatorState.nextFloor).union(elevatorState.items)))
+    def unloadItems(floors: Map[Floor, FloorState], items: Set[Item], to: Floor): Map[Floor, FloorState] = {
+      floors.updated(
+        to,
+        floors(to).union(items))
     }
 
-    def applyMove(state: State, move: ElevatorState): State = {
-      loadItems(unloadItems(state, state.elevatorState), move).copy(elevatorState = move)
+    def applyMove(state: State, move: ElevatorStep): State = {
+      State(
+        elevatorState = ElevatorState(move.nextFloor),
+        floors =
+          unloadItems(
+            loadItems(state.floors, move.items, state.elevatorState.currentFloor),
+            move.items,
+            move.nextFloor)
+      )
     }
 
     def estimatedCost(state: State): Int = {
-      state.floors(Floor(3)).size * 2 +
-      state.floors(Floor(2)).size * 4 +
-      state.floors(Floor(1)).size * 6 +
-      state.elevatorState.items.size * (2 * (4 - state.elevatorState.nextFloor.number))
+      val a = state.floors(Floor(3)).size * 2
+      val b = state.floors(Floor(2)).size * 4
+      val c = state.floors(Floor(1)).size * 6
+      a+b+c
     }
 
     case class Step(state: State, history: List[State], cost: Int) {
       def fullPath: List[State] = (state :: history).reverse
       def stepCount: Int = history.size
 
-      def next(move: ElevatorState): Step = {
+      def next(move: ElevatorStep): Step = {
         val nextState = applyMove(state, move)
         val estimation = stepCount + 1 + estimatedCost(nextState)
         Step(nextState, state :: history, estimation)
@@ -210,7 +215,7 @@ object Day11 extends App {
     val elementCount = 2
 
     val initialState = State(
-      ElevatorState(Floor(2), Floor(1), Set.empty),
+      ElevatorState(Floor(1)),
       Map(
         Floor(1) -> Set(Microchip(Hydrogen), Microchip(Lithium)),
         Floor(2) -> Set(Generator(Hydrogen)),
@@ -235,7 +240,7 @@ object Day11 extends App {
     def elementCount = 5
 
     def initialState = State(
-      ElevatorState(Floor(2), Floor(1), Set.empty),
+      ElevatorState(Floor(1)),
       Map(
         Floor(1) -> Set(Generator(Polonium), Generator(Thulium), Microchip(Thulium), Generator(Promethium), Generator(Ruthenium), Microchip(Ruthenium), Generator(Cobalt), Microchip(Cobalt)),
         Floor(2) -> Set(Microchip(Polonium), Microchip(Promethium)),
