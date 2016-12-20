@@ -1,4 +1,3 @@
-import scala.annotation.tailrec
 import scala.collection.SortedSet
 import scala.io.Source
 
@@ -12,7 +11,9 @@ object Day20 extends App {
     def next(): IP = IP(address + 1)
   }
 
-  case class Interval(from: IP, to: IP)
+  case class Interval(from: IP, to: IP) {
+    require(from <= to)
+  }
 
   implicit val intervalOrdering: Ordering[Interval] = Ordering.by[Interval, Long](_.from.address)
 
@@ -24,25 +25,34 @@ object Day20 extends App {
   def max(a: IP, b: IP): IP =
     if (a < b) b else a
 
-  @tailrec
-  def findFirstNotBlocked(start: IP, currentUpperLimit: IP, blockedIntervals: Seq[Interval]): IP = {
+  def findAllNonBlocked(start: IP, currentUpperLimit: IP, last: IP, blockedIntervals: Seq[Interval]): Stream[IP] = {
     blockedIntervals match {
       case Interval(from, to) +: remainingIntervals =>
+        val nextUpperLimit = max(to, currentUpperLimit)
+        val nextStart = max(nextUpperLimit.next(), start)
+
+
         if (start < from) {
-          start
-        } else {
-          val nextUpperLimit = max(to, currentUpperLimit)
-          val nextStart = max(nextUpperLimit, start)
-          findFirstNotBlocked(nextStart.next(), nextUpperLimit, remainingIntervals)
+          Stream.range(start.address, from.address).map(IP) ++ findAllNonBlocked(nextStart.next(), nextUpperLimit, last, remainingIntervals)
+        }
+        else {
+          findAllNonBlocked(nextStart, nextUpperLimit, last, remainingIntervals)
         }
       case _ =>
-        start
+        Stream.range(currentUpperLimit.next().address, last.next().address).map(IP)
     }
   }
 
 
-  val intervals = Source.fromResource("day20.txt").getLines.toSeq.map(parseInterval)
+  val intervals = Source.fromResource("day20.txt").getLines.toList.map(parseInterval)
   val sortedIntervals = SortedSet[Interval](intervals: _*)
-  val firstNonBlocked = findFirstNotBlocked(IP(0), IP(-1), sortedIntervals.toSeq)
+  val allNonBlocked = findAllNonBlocked(IP(0L), IP(-1L), IP(4294967295L), sortedIntervals.toSeq)
+
+  val firstNonBlocked = allNonBlocked.head
   println(s"The first non-blocked IP is $firstNonBlocked")
+
+  val nonBlockedCount = allNonBlocked.length
+  println(s"Number of non-blocked IPs is $nonBlockedCount")
+
+  allNonBlocked.foreach(println)
 }
