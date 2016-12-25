@@ -1,9 +1,13 @@
-import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.io.Source
 import scala.util.hashing.MurmurHash3
 
 object Day22 extends App {
+
+
+  def asT(size: Long): String = {
+    (size / (1024L * 1024L * 1024L * 1024L)).toString + "T"
+  }
 
   case class GridPosition(x: Int, y: Int) {
     override def toString: String = s"<$x, $y>"
@@ -13,10 +17,10 @@ object Day22 extends App {
     override def toString: String = s"$from => $to"
   }
 
-  case class Node(position: GridPosition, total: Int, used: Int) {
+  case class Node(position: GridPosition, total: Long, used: Long) {
     require(used <= total)
 
-    def avail: Int = total - used
+    def avail: Long = total - used
 
     def neighbours: Seq[GridPosition] = {
       Seq(
@@ -37,11 +41,19 @@ object Day22 extends App {
       this.copy(used = used + other.used)
 
     override def toString: String = {
-      s"/dev/grid/node-x${position.x}-y${position.y}\t$total\t$used\t$avail\t${((used.toDouble/total.toDouble)*100.0).formatted("%3.0f")}%"
+      s"/dev/grid/node-x${position.x}-y${position.y}\t${asT(total)}\t${asT(used)}\t${asT(avail)}\t${((used.toDouble/total.toDouble)*100.0).formatted("%3.0f")}%"
     }
   }
 
-  class Grid(width: Int, height: Int, val goalLocation: GridPosition) {
+  class GridSnapshot(private val data: Array[Long]) {
+    override def hashCode(): Int =
+      MurmurHash3.arrayHash(data)
+
+    override def equals(obj: scala.Any): Boolean =
+      data.sameElements(obj.asInstanceOf[GridSnapshot].data)
+  }
+
+  class Grid(val width: Int, val height: Int, val goalLocation: GridPosition) {
 
     private val nodes: Array[Node] = new Array(width*height)
 
@@ -79,12 +91,40 @@ object Day22 extends App {
       result
     }
 
-    def dump(): Unit = {
+    def snapshot(): GridSnapshot = {
+      val snapshot = new Array[Long](width*height + 1)
+      snapshot(0) = goalLocation.x << 32 | goalLocation.y
+      for (idx <- nodes.indices)
+        snapshot(idx + 1) = nodes(idx).used
+      new GridSnapshot(snapshot)
+    }
+
+    def draw(): Unit = {
+      val possiblePairs =
+        for {
+          node <- nodes
+          otherNode <- nodes
+        } yield (node.position, otherNode.position)
+      val viablePairs = possiblePairs.filter { case (a, b) => isViablePair(grid, a, b) }
+      val viableNodes = viablePairs.flatMap { case (a, b) => List(a, b) }.toSet
+
       for (y <- 0 until height) {
         for (x <- 0 until width) {
-          val node = this(GridPosition(x, y))
-
-          print(s"${node.used.formatted("%3d")}/${node.total.formatted("%3d")} ")
+          val node = nodes(indexOf(GridPosition(x, y)))
+          if (x == 0 && y == 0) {
+            print("(.)")
+          }
+          else if (node.position == goalLocation) {
+            print(" G ")
+          }
+          else if (node.used == 0) {
+            print(" _ ")
+          }
+          else if (viableNodes.contains(node.position)) {
+            print(" . ")
+          } else {
+            print(" # ")
+          }
         }
         println()
       }
@@ -94,12 +134,18 @@ object Day22 extends App {
       position.y*width + position.x
   }
 
+  case class SearchStep(resultGrid: Grid, steps: Vector[Move], cost: Int) {
+    def next(newGrid: Grid, move: Move): SearchStep = {
+      SearchStep(newGrid, steps :+ move, estimateCost(newGrid))
+    }
+  }
+
   val dfLine = """\/dev\/grid\/node\-x(\d+)\-y(\d+)\s+(\d+)T\s+(\d+)T\s+(\d+)T\s+(\d+)%""".r
   def parseDfOutput(line: String): Node = {
     line match {
       case dfLine(x, y, total, used, _, _) =>
         val position = GridPosition(x.toInt, y.toInt)
-        Node(position, total.toInt, used.toInt)
+        Node(position, total.toLong * 1024 * 1024 * 1024 * 1024, used.toLong * 1024 * 1024 * 1024 * 1024)
     }
   }
 
@@ -115,7 +161,7 @@ object Day22 extends App {
     }
   }
 
-  def canTake(grid: Grid, target: GridPosition, size: Int): Boolean = {
+  def canTake(grid: Grid, target: GridPosition, size: Long): Boolean = {
     grid.get(target) match {
       case Some(node) =>
         node.avail >= size
@@ -137,119 +183,74 @@ object Day22 extends App {
   }
 
   def estimateCost(grid: Grid): Int = {
-    grid.goalLocation.x + grid.goalLocation.y
+    val x = (((grid.goalLocation.x.toDouble + 1) / grid.width) * 1000).toInt
+    val y = (((grid.goalLocation.y.toDouble + 1) / grid.height) * 1000).toInt
+    val (h1, h2) = grid.allNodes.filter(_.used == 0).map(_.position).headOption match {
+      case Some(GridPosition(hx, hy)) if hy > 5 =>
+        (1000 + ((Math.max(0, hy - 5).toDouble / (grid.height - 5).toDouble) * 1000).toInt, 2000)
+
+      case Some(GridPosition(hx, hy)) if hy >= 4 && hy <= 5 =>
+        (1000, 1000 + ((Math.max(0, hx - 9).toDouble / (grid.width - 9).toDouble) * 1000).toInt + hy - 5)
+
+      case Some(GridPosition(hx, hy)) =>
+        (((Math.abs(hx - grid.goalLocation.x).toDouble / grid.width) * 1000).toInt, ((Math.abs(hy - grid.goalLocation.y).toDouble / grid.height) * 1000).toInt)
+
+      case None =>
+        (2000, 2000)
+    }
+
+    x + y + h1 + h2
   }
 
   def findShortest(initial: Grid): Option[Vector[Move]] = {
+    implicit val ordering = Ordering.by[SearchStep, Int](-_.cost)
 
-    def nodeCloserTo(target: GridPosition)(a: Node, b: Node): Boolean =
-      closerTo(target)(a.position, b.position)
+    val searchSteps: mutable.PriorityQueue[SearchStep] = mutable.PriorityQueue[SearchStep](SearchStep(initial, Vector.empty, estimateCost(initial)))
+    val visited: mutable.Set[GridSnapshot] = mutable.Set(searchSteps.map(_.resultGrid.snapshot()).toSeq : _*)
+    var result: Option[Vector[Move]] = None
+    var reportTick: Long = System.currentTimeMillis()
 
-    def closerTo(target: GridPosition)(a: GridPosition, b: GridPosition): Boolean = {
-      val dxa = Math.abs(a.x - target.x)
-      val dya = Math.abs(a.y - target.y)
-      val dxb = Math.abs(b.x - target.x)
-      val dyb = Math.abs(b.y - target.y)
+    while (searchSteps.nonEmpty && result.isEmpty) {
+      val searchStep = searchSteps.dequeue
 
-      (dxa + dya) < (dxb + dyb)
-    }
-
-    def tryPath(state: Grid, from: Node, to: Node): Option[Move] = {
-      val validMoves = from.neighbours
-          .filter(p => p != state.goalLocation)
-          .filter(p => canTake(state, from.position, state(p).used)).sortWith(closerTo(to.position))
-      validMoves.headOption match {
-        case Some(move) => Some(Move(move, from.position))
-        case None => None
+      val tick = System.currentTimeMillis()
+      if ((tick - reportTick) > 5000) {
+        println(s"Current step count: ${searchStep.steps.length}; estimation: ${searchStep.cost} queue length: ${searchSteps.length}; visited states: ${visited.size}")
+        searchStep.resultGrid.draw()
+        reportTick = tick
       }
-    }
 
-    @tailrec
-    def tryPaths(state: Grid, to: Node, orderedTargets: Seq[Node]): Option[Move] = {
-      orderedTargets match {
-        case target +: rest =>
-          tryPath(state, target, to) match {
-            case Some(result) => Some(result)
-            case None => tryPaths(state, to, rest)
-          }
-        case _ =>
-          None
-      }
-    }
-
-    def step(state: Grid): Option[Move] = {
-      if (isGoalReached(state))
-        None
-      else {
-        val goalNode = state(state.goalLocation)
-        val toLeft = GridPosition(state.goalLocation.x - 1, state.goalLocation.y)
-        val nodeToLeft = state(toLeft)
-        if (nodeToLeft.avail >= goalNode.used) {
-          Some(Move(state.goalLocation, toLeft))
-        } else {
-          val possibleTargets =
-            state.allNodes.filter(otherNode => isViablePair(state, nodeToLeft.position, otherNode.position))
-          val immediateTargets = possibleTargets.filter(target => nodeToLeft.neighbours.contains(target.position))
-          immediateTargets.headOption match {
-            case Some(immediateTarget) =>
-              Some(Move(toLeft, immediateTarget.position))
-            case None =>
-              val orderedTargets = possibleTargets.sortWith(nodeCloserTo(toLeft))
-              tryPaths(state, nodeToLeft, orderedTargets) match {
-                case Some(result) => Some(result)
-                case None =>
-                  val possiblePairs =
-                    for {
-                      node <- state.allNodes
-                      otherNode <- state.allNodes
-                    } yield (node.position, otherNode.position)
-                  val viablePairs = possiblePairs.filter { case (a, b) => isViablePair(state, a, b) }
-                  val sortedViablePairs = viablePairs.sortWith((a, b) => closerTo(toLeft)(a._1, b._1))
-                  sortedViablePairs.headOption match {
-                    case Some((from, to)) =>
-                      tryPaths(state, state(from), Seq(state(to)))
-                    case None =>
-                      None
-                  }
-
-              }
+      if (isGoalReached(searchStep.resultGrid)) {
+        result = Some(searchStep.steps)
+      } else {
+        val moves = validMoves(searchStep.resultGrid)
+        for (nextMove <- moves) {
+          val resultGrid = searchStep.resultGrid.move(nextMove)
+          val snapshot = resultGrid.snapshot()
+          if (!visited.contains(snapshot)) {
+            val nextStep = searchStep.next(resultGrid, nextMove)
+            searchSteps.enqueue(nextStep)
+            visited.add(snapshot)
           }
         }
       }
     }
 
-    @tailrec
-    def collectSteps(state: Grid, steps: Vector[Move]): (Grid, Vector[Move]) = {
-      state.dump()
-      val nextStep = step(state)
-      println(s"STEP: $nextStep")
-      nextStep match {
-        case Some(move) =>
-          collectSteps(state.move(move), steps :+ move)
-        case None =>
-          (state, steps)
-      }
-    }
-
-    val (finalState, steps) = collectSteps(initial, Vector.empty)
-    if (isGoalReached(finalState)) {
-      Some(steps)
-    } else {
-      None
-    }
+    result
   }
 
+
   val nodes = Source.fromResource("day22.txt").getLines.drop(2).map(parseDfOutput).toList
-//    val nodes =
-//      """/dev/grid/node-x0-y0   10T    8T     2T   80%
-//        |/dev/grid/node-x0-y1   11T    6T     5T   54%
-//        |/dev/grid/node-x0-y2   32T   28T     4T   87%
-//        |/dev/grid/node-x1-y0    9T    7T     2T   77%
-//        |/dev/grid/node-x1-y1    8T    0T     8T    0%
-//        |/dev/grid/node-x1-y2   11T    7T     4T   63%
-//        |/dev/grid/node-x2-y0   10T    6T     4T   60%
-//        |/dev/grid/node-x2-y1    9T    8T     1T   88%
-//        |/dev/grid/node-x2-y2    9T    6T     3T   66%""".stripMargin.lines.map(parseDfOutput).toList
+  //  val nodes =
+  //    """/dev/grid/node-x0-y0   10T    8T     2T   80%
+  //      |/dev/grid/node-x0-y1   11T    6T     5T   54%
+  //      |/dev/grid/node-x0-y2   32T   28T     4T   87%
+  //      |/dev/grid/node-x1-y0    9T    7T     2T   77%
+  //      |/dev/grid/node-x1-y1    8T    0T     8T    0%
+  //      |/dev/grid/node-x1-y2   11T    7T     4T   63%
+  //      |/dev/grid/node-x2-y0   10T    6T     4T   60%
+  //      |/dev/grid/node-x2-y1    9T    8T     1T   88%
+  //      |/dev/grid/node-x2-y2    9T    6T     3T   66%""".stripMargin.lines.map(parseDfOutput).toList
 
   val gridWidth = nodes.map(_.position.x).max + 1
   val gridHeight = nodes.map(_.position.y).max + 1
@@ -267,6 +268,8 @@ object Day22 extends App {
     } yield (node.position, otherNode.position)
   val viablePairs = possiblePairs.filter { case (a, b) => isViablePair(grid, a, b) }
   println(s"Number of viable pairs: ${viablePairs.length}")
+
+  grid.draw()
 
   findShortest(grid) match {
     case Some(steps) =>
